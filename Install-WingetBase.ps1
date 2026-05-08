@@ -1,4 +1,4 @@
-# Install-WingetBase.ps1
+# Install-WingetBase.ps1 — Merged: PSGallery First + Sideload Fallback
 
 $ErrorActionPreference = "Stop"
 
@@ -11,25 +11,35 @@ Start-Transcript -Path "$LogPath\WingetBase-Install.log" -Force -Append
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# --- Helper Function: Test if WinGet is functional ---
-function Test-WingetFunctional {
+# --- Helper Function: Test if WinGet is functional, returns version or $null ---
+function Get-WingetStatus {
     try {
         $exe = Resolve-Path "C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe\winget.exe" -ErrorAction SilentlyContinue |
             Sort-Object Path | Select-Object -Last 1
-        if (-not $exe) { return $false }
+        if (-not $exe) { return $null }
         $out = & $exe.Path --version 2>&1
-        return (-not [string]::IsNullOrWhiteSpace($out))
-    } catch { return $false }
+        if (-not [string]::IsNullOrWhiteSpace($out)) { return $out.Trim() }
+        return $null
+    } catch { return $null }
 }
 
 # --- Pre-check: Already functional? ---
-if (Test-WingetFunctional) {
-    Write-Output "PRE-CHECK: WinGet already functional. Nothing to do."
+$currentVersion = Get-WingetStatus
+if ($currentVersion) {
+    Write-Output "PRE-CHECK: WinGet already functional. Version: $currentVersion"
     Stop-Transcript
     Exit 0
 }
 
-Write-Output "WinGet not functional. Starting install..."
+$exePath = Resolve-Path "C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe\winget.exe" -ErrorAction SilentlyContinue |
+    Sort-Object Path | Select-Object -Last 1
+if ($exePath) {
+    Write-Output "PRE-CHECK: WinGet binary found at $($exePath.Path) but not functional (Silent Failure)."
+} else {
+    Write-Output "PRE-CHECK: WinGet binary not found."
+}
+
+Write-Output "Starting install..."
 
 # =====================================================
 # METHOD 1: PSGallery / Repair-WinGetPackageManager
@@ -57,8 +67,9 @@ try {
     for ($i = 1; $i -le 6; $i++) {
         Write-Output "PSGallery verification attempt $i of 6..."
         Start-Sleep -Seconds 10
-        if (Test-WingetFunctional) {
-            Write-Output "METHOD 1 SUCCESS: WinGet is functional after PSGallery repair."
+        $version = Get-WingetStatus
+        if ($version) {
+            Write-Output "METHOD 1 SUCCESS: WinGet is functional. Version: $version"
             $method1Success = $true
             break
         }
@@ -113,8 +124,9 @@ if (-not $method1Success) {
         for ($i = 1; $i -le 6; $i++) {
             Write-Output "Sideload verification attempt $i of 6..."
             Start-Sleep -Seconds 10
-            if (Test-WingetFunctional) {
-                Write-Output "METHOD 2 SUCCESS: WinGet is functional after sideload."
+            $version = Get-WingetStatus
+            if ($version) {
+                Write-Output "METHOD 2 SUCCESS: WinGet is functional. Version: $version"
                 Remove-Item -Path $StagingPath -Recurse -Force -ErrorAction SilentlyContinue
                 Stop-Transcript
                 Exit 0
@@ -122,7 +134,7 @@ if (-not $method1Success) {
             Write-Output "Not ready yet..."
         }
 
-        Throw "METHOD 2: Sideload completed but WinGet still not functional."
+        Throw "METHOD 2: Sideload completed but WinGet still not functional after 60 seconds."
     }
     catch {
         Write-Error "METHOD 2 FAILED: $($_.Exception.Message)"
